@@ -211,4 +211,64 @@ However, this additional step can be very time-consuming and hog the main scrape
 Therefore, we need an efficient way of integrating this.
 
 #### Integration
+
+```mermaid
+sequenceDiagram
+autonumber
+participant P as Preprocessing<br/>Process
+participant D as Database
+participant Q as Validated<br/>Proxy Queue
+participant S as ScraperScript
+participant E as EventLoop
+participant PP as ProxyPool
+participant AP as Async Proxy<br/>Preprocessor
+participant W as Website
+
+    rect rgb(200, 220, 255)
+        note over P,D: Preprocessing Stage
+        P->>W: Crawl website for request metadata
+        P->>P: Parse & construct metadata combinations
+        P->>D: Store in category_table
+    end
+
+    rect rgb(220, 255, 200)
+        note over S,PP: Main Scraping Stage
+        S->>D: Fetch request metadata
+        D-->>S: Return metadata list
+        
+        S->>S: Construct request objects
+        S->>E: Schedule coroutines
+        
+        loop EventLoop processes coroutines
+            S->>PP: get_proxy()
+            
+            opt Pool size < threshold
+                PP->>AP: Trigger refresh
+                activate AP
+                AP->>W: Scrape & validate proxies
+                AP->>Q: Push to validated queue
+                AP-->>PP: Refresh complete
+                deactivate AP
+                
+                PP->>PP: Lock pool
+                PP->>Q: Fetch validated proxies
+                PP->>PP: Update pool
+                PP->>S: Release lock
+            end
+            
+            PP-->>S: Return proxy
+            
+            S->>W: Execute request via proxy
+            alt Success
+                W-->>S: Response
+                S->>S: Process & store data
+            else Rate Limited / Timeout
+                W-->>S: 429 / Timeout
+                S->>PP: remove_proxy()
+                S->>E: Retry with new proxy
+            end
+        end
+    end
+```
+
 Instead of coupling proxy validation with the main scraping event loop, we offload the preprocessing workload to a separate process. We can use **Redis pub/sub** for Inter-Process Communication (IPC).
