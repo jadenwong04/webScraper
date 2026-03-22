@@ -271,4 +271,14 @@ participant W as Website
     end
 ```
 
-Instead of coupling proxy validation with the main scraping event loop, we offload the preprocessing workload to a separate process. We can use **Redis pub/sub** for Inter-Process Communication (IPC).
+#### Why this solves the time-consuming aspect
+
+The async preprocessor transforms a blocking bottleneck into a non-blocking background task.
+
+| **Aspect** | **Synchronous Approach** | **Async Preprocessor**                                                    |
+|------------|-------------------------|---------------------------------------------------------------------------|
+| **Timing** | Validate proxies during scraping (blocking) | Validate on-demand when pool is low (avoid unnecessary upfront work)      |
+| **Execution** | Sequential validation | Parallel validation via a separate event loop                             |
+| **Impact** | Scraper waits for each validation | Scraper continues while validation runs in background (Producer-Consumer) |
+
+> **Result:** The scraper maintains high throughput because proxy validation no longer competes with request execution. The validated queue acts as a buffer, ensuring a steady supply of working proxies without blocking the main scraping loop.
