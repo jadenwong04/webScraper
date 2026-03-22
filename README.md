@@ -3,7 +3,7 @@
 ---
 
 ## Introduction
-Data is an important foundation for any type of project — whether it's powering a machine learning model, driving business intelligence dashboards, or monitoring real-world trends. 
+Data is an important foundation for any type of project — whether it's powering a machine learning model, driving business intelligence dashboards, or monitoring real-world trends.
 
 Yet, in most projects, acquiring the right data is often the most challenging step. The difficulties stem from two key factors:
 - **Volume** — Do we have sufficient data to produce statistically meaningful insights?
@@ -63,7 +63,7 @@ After 8 hours of continuous execution:
 > The scraper spent an entire workday processing less than 10% of its total workload.
 
 ### 2. Availability
-As execution progressed, we can observe from the analysis that a large distribution of failed requests occurred during end of the execution. 
+As execution progressed, we can observe from the analysis that a large distribution of failed requests occurred during end of the execution.
 
 > This relationship aligns with a technique called **rate-limiting** which are used to throttle excessive traffic coming from the same origin.
 
@@ -74,7 +74,7 @@ At surface, the workload appears to be inherently sequential. Each category of d
 
 Let's consider optimizations on the system-level.
 
-**Question**: 
+**Question**:
 Are there dependencies between each request?
 
 **Answer**:
@@ -86,11 +86,11 @@ With that in mind, let's introduce a preprocessing step.
 The goal of this step is to bundle all time-consuming modular operations so we that we can parallelize them later on. In our case, we will construct all combinations of ticketing requests in advance.
 
 **Concerns**
-- **Would this be applicable when dependencies exists?** 
+- **Would this be applicable when dependencies exists?**
 > Depending on the extent/level of dependencies. If endpoints are deeply rooted across many different branches (with respect to N), the preprocessing step may have to be decomposed into separate steps/layers. In essence, it is important to analyze the tradeoff between preprocessing overhead and theoretical speed-up.
 
 ### Choosing a Model
-Network requests are I/O bound tasks, where the primary bottleneck is I/O Latency, not CPU computation. 
+Network requests are I/O bound tasks, where the primary bottleneck is I/O Latency, not CPU computation.
 
 ![Request Execution](images/requestExecution.png)
 
@@ -134,7 +134,7 @@ Despite being lighter than processes, threads are managed by the OS. Scaling to 
 > 1. Event Loop: Manages scheduled coroutines and their execution.
 > 2. Coroutines: Function that can pause and resume their executions.
 
-In essence, this model achieves concurrency via an event-driven architecture where coroutines can yield control back to the event loop during I/O operations. 
+In essence, this model achieves concurrency via an event-driven architecture where coroutines can yield control back to the event loop during I/O operations.
 
 **Resource Overhead**
 
@@ -235,13 +235,13 @@ participant W as Website
         note over S,PP: Main Scraping Stage
         S->>D: Fetch request metadata
         D-->>S: Return metadata list
-        
+
         S->>S: Construct request objects
         S->>E: Schedule coroutines
-        
+
         loop EventLoop processes coroutines
             S->>PP: get_proxy()
-            
+
             opt Pool size < threshold
                 PP->>AP: Trigger refresh
                 activate AP
@@ -249,15 +249,15 @@ participant W as Website
                 AP->>Q: Push to validated queue
                 AP-->>PP: Refresh complete
                 deactivate AP
-                
+
                 PP->>PP: Lock pool
                 PP->>Q: Fetch validated proxies
                 PP->>PP: Update pool
                 PP->>S: Release lock
             end
-            
+
             PP-->>S: Return proxy
-            
+
             S->>W: Execute request via proxy
             alt Success
                 W-->>S: Response
@@ -282,3 +282,132 @@ The async preprocessor transforms a blocking bottleneck into a non-blocking back
 | **Impact** | Scraper waits for each validation | Scraper continues while validation runs in background (Producer-Consumer) |
 
 > The scraper maintains high throughput because proxy validation no longer competes with request execution. The validated queue acts as a buffer, ensuring a steady supply of working proxies without blocking the main scraping loop.
+
+### Managing Proxy Servers
+
+With validated proxies in hand, the challenge shifts to efficient utilization — maximizing throughput while handling inevitable failures.
+
+#### Design Requirements
+
+**1. Even Load Distribution**
+
+To prevent rate-limiting, proxies must be used evenly — each proxy should handle roughly the same number of requests before any repetition.
+
+```mermaid
+flowchart LR
+    subgraph State1[Request 1]
+        P1[Proxy 1] --> P2[Proxy 2]
+        P2 --> P3[Proxy 3]
+        P3 --> P4[Proxy 4]
+        P4 --> P1
+        style P1 fill:#bbf,stroke:#333,stroke-width:3px
+        style P2 fill:#fff,stroke:#333
+        style P3 fill:#fff,stroke:#333
+        style P4 fill:#fff,stroke:#333
+    end
+
+    subgraph State2[Request 2]
+        Q1[Proxy 1] --> Q2[Proxy 2]
+        Q2 --> Q3[Proxy 3]
+        Q3 --> Q4[Proxy 4]
+        Q4 --> Q1
+        style Q1 fill:#fff,stroke:#333
+        style Q2 fill:#bbf,stroke:#333,stroke-width:3px
+        style Q3 fill:#fff,stroke:#333
+        style Q4 fill:#fff,stroke:#333
+    end
+
+    State1 -.->|Advance pointer| State2
+```
+
+---
+
+#### Choice of Data Structure
+
+The **Circular Rotation** behavior is not the sole factor that determines the data structure that we use. 
+
+Let's take a look at the design comparisons.
+
+**1. Array-based Proxy Pool**
+
+```mermaid
+flowchart LR
+    subgraph Before[Before]
+        direction LR
+        B1["Proxy 1"] --- B2["Proxy 2 ❌"] --- B3["Proxy 3"] --- B4["Proxy 4"]
+        style B2 fill:#f99,stroke:#333
+    end
+
+    subgraph After[After]
+        direction LR
+        C1["Proxy 1"] --- C2["Proxy 3"] --- C3["Proxy 4"] --- C4[" "]
+        style C4 fill:#eee,stroke:#333
+    end
+
+    Before -->|Shift elements left| After
+```
+This design supports both the load balancing and ingestion behavior.
+
+However, if we referred back to the drawbacks of using public proxy servers, we know that they are likely to fail overtime. Therefore, the deletion of faulty proxies must also be considered in our design.
+
+> With the Array implementation, removing a failed proxy requires shifting all subsequent elements. Consequently, this will decrease concurrency due to increased lock contention.
+
+**2. Linked-List-based Proxy Pool**
+
+```mermaid
+flowchart LR
+    subgraph Before[Before]
+        L1[Proxy 1] <--> L2[Proxy 2 ❌] <--> L3[Proxy 3] <--> L4[Proxy 4]
+        L4 <--> L1
+        style L2 fill:#f99,stroke:#333,stroke-dasharray: 5 5
+    end
+
+    subgraph After[After]
+        L5[Proxy 1] <--> L6[Proxy 3] <--> L7[Proxy 4]
+        L7 <--> L5
+        style L5 fill:#e8f5e9,stroke:#2e7d32
+        style L6 fill:#e8f5e9,stroke:#2e7d32
+        style L7 fill:#e8f5e9,stroke:#2e7d32
+    end
+
+    Before -.->|Unlink| After
+```
+
+By incorporating a `previous` and `next` pointer for each node, we can enable constant time proxy removals. Thereby, reducing lock contention and increasing concurrency. 
+
+In addition to that, the circular behavior can be replicated more easily as with pointer transitions instead of indexing updates.
+
+The trade-off for the increased concurrency is additional pointer references for each node.
+
+---
+
+#### Adaptive Concurrency
+
+With a circular proxy pool that can indefinitely distribute even workload with available proxies. **How can we control the number of executing requests aka Concurrency?**
+
+| Concurrency Limit | Result                                                        |
+|-------------------|---------------------------------------------------------------|
+| Too Small         | Proxies sit idle and we don't reap the benefits of concurrency |
+| Too Large         | Risk of proxies rate limiting early.                          |
+
+**Solution: Dynamic Semaphore**
+
+A standard semaphore has a fixed limit set at initialization. But in our proxy pool, the size is constantly changing — new proxies or revoked proxies.
+
+```mermaid
+flowchart TB
+    A[Pool grows] --> B[Semaphore expands]
+    B --> C[More concurrency]
+    
+    D[Pool shrinks] --> E[Semaphore contracts]
+    E --> F[Prevent overload]
+    
+    style A fill:#e3f2fd,stroke:#1565c0
+    style D fill:#ffebee,stroke:#c62828
+```
+
+Whenever there is a change to the size of the proxy pool, the limit recalculates as `pool_size × speedup_factor`.
+
+> This creates a self-regulating system: concurrency expands to seize opportunity, contracts to prevent overload, and never blocks requests that already hold permits.
+
+---
