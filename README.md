@@ -281,4 +281,4 @@ The async preprocessor transforms a blocking bottleneck into a non-blocking back
 | **Execution** | Sequential validation | Parallel validation via a separate event loop                             |
 | **Impact** | Scraper waits for each validation | Scraper continues while validation runs in background (Producer-Consumer) |
 
-> **Result:** The scraper maintains high throughput because proxy validation no longer competes with request execution. The validated queue acts as a buffer, ensuring a steady supply of working proxies without blocking the main scraping loop.
+> The scraper maintains high throughput because proxy validation no longer competes with request execution. The validated queue acts as a buffer, ensuring a steady supply of working proxies without blocking the main scraping loop.
